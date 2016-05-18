@@ -18,10 +18,6 @@ library(lme4)
 library(arm)
 library(gamm4)
 
-#detach("package:nlme")
-
-load("D:/Dropbox/ASD/Analyses/Processed_DB_new.RData")
-max(ASD$Year,na.rm=T)
 #setwd("d:/Dropbox/My_Papers/Biomass_and_age/")
 setwd("d:/Github/Current_papers/Biomass_ts")
 
@@ -107,7 +103,8 @@ for(i in 1:num.stocks)
 
 } # end for(i in 1:num.stocks)  
 
-### OK, now we have the data, time to start walking through the models properlay
+### OK, now we have the data, time to start walking through the models properly
+
 
 
 
