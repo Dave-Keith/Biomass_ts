@@ -18,84 +18,84 @@ library(lme4)
 library(arm)
 detach("package:nlme")
 
-setwd("d:/Dropbox/My_Papers/Biomass_and_age/")
+#setwd("d:/Dropbox/My_Papers/Biomass_and_age/")
+setwd("d:/Github/Current_papers/Biomass_ts")
 
-ASD_MGMT<-read.csv("ASD_MGMT.csv", header=T)
-names(ASD_MGMT)
-ASD_MGMT$Stock.ID
-levels(ASD_MGMT$Management)
-ASD_MGMT$Species
+ASD_MGMT<-read.csv("ASD_MGMT.csv", header=T,stringsAsFactors = F)
 geo.mean <- function(x,n) prod(x)^(1/n) 
 
 unique.stocks <- as.character(unique(ASD_MGMT$Stock.ID))
 num.stocks <- length(unique.stocks)
-str(ASD_MGMT)
 
-CSEE <- zeros(num.stocks,8)
 
+# What are we going to pick as our variable to look at?
+# Options are any of the age specific variables... "SSB","BM","Num","Catch","FM",
+var <- "BM"
+
+db <- NULL
+ages <- NULL
+age.quan <- NULL
+young.ages <- NULL
+old.ages <- NULL
+i=5
+# so we want to run a loop to grab the biomass estiamtes for each stock
 for(i in 1:num.stocks)  
 {
-  if(i != 69 && i != 72 && i != 125 && i != 19 && i !=18 && i != 9 && i != 29 && i !=41)
-  {
+  #if(i != 69 && i != 72 && i != 125 && i != 19 && i !=18 && i != 9 && i != 29 && i !=41)
+  #{
+    # Get the stock information....
     name <- unique.stocks[i]
-    Order<-as.character(ASD_MGMT$Order[ASD_MGMT$Stock.ID == name ][1])
-    MGMT<-as.character(ASD_MGMT$Management[ASD_MGMT$Stock.ID == name ] [1])
-    Species<-as.character(ASD_MGMT$Species[ASD_MGMT$Stock.ID == name] [1])
-    st <- ASD_MGMT[ASD_MGMT$Stock.ID == name,grep("BM",names(ASD_MGMT))] 
-    check <- unlist(c(st))
-    if(length(na.omit(check)) > 0)
+    dat.names <- c("Stock.ID","Management","Area","Order","Family","Genus","Species","LME","Year")
+    dat <- subset(ASD_MGMT, Stock.ID == name ,select = c(dat.names,names(ASD_MGMT[,grep(var,names(ASD_MGMT))])))
+    
+    #years <- as.character(ASD_MGMT$Year[ASD_MGMT$Stock.ID == name ][1])
+    cols <- which(colSums(dat[,grep(var,names(dat))],na.rm=T) > 0)
+    rows <- which(rowSums(subset(dat,select = -c(which(names(dat) %in% dat.names))),na.rm=T) == 0)
+    # Remove any columns with no data
+    if(length(cols) > 0)
     {
-      # Need to get rid of rows full of NA's...
-      kay <- 0
-      #k=18
-      for(k in 1:length(st[,1]))
-      {
-        if(length(na.omit(as.numeric(st[k,]))) == 0) kay <- c(kay,k)
-        
-      }
-      # kay is the 
-      if(length(kay) > 1) st <- st[-kay,]  
-      if(min(st,na.rm=T) == 0) 
-      {
-        mins <- 0.1*min(st[st>0],na.rm=T)
-        j=17
-        for(j in 1:length(st[1,]))
-        {
-          if(length(which(na.omit(st[,j])==0)) >0) st[(st[,j]==0),j] <- mins
-        }
-      }
-      ages <- which(colSums(st,na.rm=T) >0)-1 
-      quan <- quantile(ages) 
-      LQ <- round(quan[1]):round(quan[2])
-      UQ <- round(quan[4]):round(quan[5]) 
-      years <- 5
-      ts_len <- length(st[,1]) 
-      BM_LQ_start <- st[1:years,LQ+1]
-      BM_UQ_start <-  st[1:years,UQ+1]
-      BM_LQ_now <- st[(ts_len-years+1):ts_len,LQ+1]
-      BM_UQ_now <- st[(ts_len-years+1):ts_len,UQ+1]
-      BM_LQ_start_tot <- rowSums(BM_LQ_start)
-      BM_UQ_start_tot <- rowSums(BM_UQ_start)
-      BM_LQ_now_tot <- rowSums(BM_LQ_now)
-      BM_UQ_now_tot <- rowSums(BM_UQ_now)
-      BM_geo_LQS <- log(geo.mean(BM_LQ_start_tot,years)) #geomean of youngest over first 5 years
-      BM_geo_UQS <- log(geo.mean(BM_UQ_start_tot,years)) #geomean of oldest over first 5 years
-      BM_geo_LQN <- log(geo.mean(BM_LQ_now_tot,years)) #geomean of youngest over last 5 years (now)
-      BM_geo_UQN <- log(geo.mean(BM_UQ_now_tot,years)) #geomean of oldest over last 5 years (now)
-      BM_dec_LQ <- (BM_geo_LQN - BM_geo_LQS) 
-      BM_dec_UQ <- (BM_geo_UQN - BM_geo_UQS) 
-      percent_difference_old<-((BM_geo_UQN-BM_geo_UQS)/BM_geo_UQS)*100
-      percent_difference_young<-((BM_geo_LQN-BM_geo_LQS)/BM_geo_LQS)*100 #geometric mean
-      CSEE[i,]<-c(name, Order, Species, MGMT, BM_dec_UQ, percent_difference_old, 
-                  BM_dec_LQ, percent_difference_young)
+      db[[name]] <- dat[,c(1:length(dat.names),cols + length(dat.names))]
+    } # end if(length(cols) > 0)
+    # Remove any years with no data
+    if(length(rows) > 0)
+    {
+      db[[name]] <- db[[name]][-rows,]
+    } # end if(length(rows) > 0)
+    
+    # If we have data...
+    if(length(cols) > 0 && length(rows) == 0)
+    {
+      # OK, this is a bizarro way to get the ages but it does the trick!
+      ages[[name]]  <- as.numeric(substr(names(db[[name]][(grep("[[:digit:]]",names(db[[name]])))]),start=(nchar(var)+2),stop=(nchar(var)+3)))
+      var.names <- names(db[[name]][(grep("[[:digit:]]",names(db[[name]])))])
       
-    }
-  }
-}
-i
-CSEE[,]
-bad.stocks <- c(which(CSEE[,1] == 0), attr(na.omit(CSEE[,5]),"na.action"))
-CSEE <- CSEE[-bad.stocks,]
+      age.quan[[name]] <- quantile(ages[[name]]) 
+      young.ages[[name]] <- round(age.quan[[name]][1]):round(age.quan[[name]][2])
+      var.names.young <- var.names[1:length(young.ages[[name]])]
+        
+      old.ages[[name]] <- round(age.quan[[name]][4]):round(age.quan[[name]][5]) 
+      var.names.old <- var.names[(length(ages[[name]]) - length(old.ages[[name]] ) +1) : length(ages[[name]])]
+      
+      db[[name]]$total <- rowSums(subset(db[[name]],select = -c(which(names(db[[name]]) %in% dat.names))))
+      db[[name]]$old   <- rowSums(subset(db[[name]],select = c(which(names(db[[name]]) %in% var.names.old))))
+      db[[name]]$young <- rowSums(subset(db[[name]],select = c(which(names(db[[name]]) %in% var.names.young))))
+      
+    } # end if(length(cols) > 0 && length(rows) > 0)
+
+} # end for(i in 1:num.stocks)  
+
+plot(db[[name]]$SSB.total~db[[name]]$Year,log="y",type="o",col="black",
+     pch=15,ylim=c(min(db[[name]]$old[db[[name]]$SSB.old>0]),max(db[[name]]$total)))
+lines(db[[name]]$SSB.old~db[[name]]$Year,type="o",col="blue",pch=16)
+lines(db[[name]]$SSB.young~db[[name]]$Year,type="o",col="orange",pch=17)
+
+tst <- do.call("cbind",db[[name]])
+head(tst)
+
+tst <- gam(SSB.young~s(Year),data=db[[name]])
+summary(tst)
+plot(tst)
+
 
 # save(GEO,file="GEO.rdata")
 CSEE.ALL <- rbind(CSEE[,1:6],CSEE[,c(1,2,3,4,7,8)]) #divide young and old
@@ -568,7 +568,8 @@ summary.aov(lm(DBM~Species))
 
 
 #GRAPH 5
-boxplot(DBM~Species, main="Difference in Log of Biomass for Selected Species", col=(c("lightpink", "salmon", "lightpink","palevioletred4", "palevioletred4")))
+boxplot(DBM~Species, main="Difference in Log of Biomass for Selected Species",
+        col=(c("lightpink", "salmon", "lightpink","palevioletred4", "palevioletred4")))
 summary(Species)
 summary(lm(DBM~Age*Species))
 
@@ -926,7 +927,8 @@ Age<-SPLIM$Age
 summary(lm(DBM~Species))
 summary.aov(lm(DBM~Species))
 #Graph 7
-boxplot(DBM~Species, main="Difference in Biomass for Selected Species", col=(c("lightpink", "salmon", "lightpink","palevioletred4", "palevioletred4")))
+boxplot(DBM~Species, main="Difference in Biomass for Selected Species", 
+        col=(c("lightpink", "salmon", "lightpink","palevioletred4", "palevioletred4")))
 
 summary(lm(DBM~Age*Species))
 summary(lmer(DBM~Age+(1+Age|Species)))
@@ -1733,7 +1735,8 @@ Age<-SPNLIM$Age
 summary(lm(DNUM~Species))
 summary.aov(lm(DNUM~Species))
 #Graph N7
-boxplot(DNUM~Species, main="Difference in Number for Selected Species", col=(c("lightpink", "salmon", "lightpink","palevioletred4", "palevioletred4")))
+boxplot(DNUM~Species, main="Difference in Number for Selected Species", 
+        col=(c("lightpink", "salmon", "lightpink","palevioletred4", "palevioletred4")))
 
 summary(lm(DBM~Age*Species))
 summary(lmer(DBM~Age+(1+Age|Species)))
