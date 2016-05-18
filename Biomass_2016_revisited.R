@@ -16,12 +16,19 @@ rm(list=ls(all=T))
 library(matlab)
 library(lme4)
 library(arm)
-detach("package:nlme")
+library(gamm4)
 
+#detach("package:nlme")
+
+load("D:/Dropbox/ASD/Analyses/Processed_DB_new.RData")
+max(ASD$Year,na.rm=T)
 #setwd("d:/Dropbox/My_Papers/Biomass_and_age/")
 setwd("d:/Github/Current_papers/Biomass_ts")
 
 ASD_MGMT<-read.csv("ASD_MGMT.csv", header=T,stringsAsFactors = F)
+# Currently the mid-point of most time series is 1989...
+mean.year <- round(mean(ASD_MGMT$Year))
+ASD_MGMT$Year_cen <- ASD_MGMT$Year-mean.year
 geo.mean <- function(x,n) prod(x)^(1/n) 
 
 unique.stocks <- as.character(unique(ASD_MGMT$Stock.ID))
@@ -45,7 +52,7 @@ for(i in 1:num.stocks)
   #{
     # Get the stock information....
     name <- unique.stocks[i]
-    dat.names <- c("Stock.ID","Management","Area","Order","Family","Genus","Species","LME","Year")
+    dat.names <- c("Stock.ID","Management","Area","Order","Family","Genus","Species","LME","Year","Year_cen")
     dat <- subset(ASD_MGMT, Stock.ID == name ,select = c(dat.names,names(ASD_MGMT[,grep(var,names(ASD_MGMT))])))
     
     #years <- as.character(ASD_MGMT$Year[ASD_MGMT$Stock.ID == name ][1])
@@ -63,7 +70,7 @@ for(i in 1:num.stocks)
     } # end if(length(rows) > 0)
     
     # If we have data...
-    if(length(cols) > 0 && length(rows) == 0)
+    if(is.null(db[[name]]) == F)
     {
       # OK, this is a bizarro way to get the ages but it does the trick!
       ages[[name]]  <- as.numeric(substr(names(db[[name]][(grep("[[:digit:]]",names(db[[name]])))]),start=(nchar(var)+2),stop=(nchar(var)+3)))
@@ -76,27 +83,70 @@ for(i in 1:num.stocks)
       old.ages[[name]] <- round(age.quan[[name]][4]):round(age.quan[[name]][5]) 
       var.names.old <- var.names[(length(ages[[name]]) - length(old.ages[[name]] ) +1) : length(ages[[name]])]
       
+      # A few differnt ways to define our response variable, stan might be the most statisically 
+      # pleasing one, I think ratio is the easiest transformation to wrap my head around and to
+      # use when comparing models...
+      # The offset might work nicely in terms of the model too and avoid transformation concerns...
       db[[name]]$total <- rowSums(subset(db[[name]],select = -c(which(names(db[[name]]) %in% dat.names))))
-      db[[name]]$old   <- rowSums(subset(db[[name]],select = c(which(names(db[[name]]) %in% var.names.old))))
-      db[[name]]$young <- rowSums(subset(db[[name]],select = c(which(names(db[[name]]) %in% var.names.young))))
+      db[[name]]$total_ratio   <- db[[name]]$total/max(db[[name]]$total,na.rm=T)
+      db[[name]]$total_stan   <- scale(log(db[[name]]$total))
+      db[[name]]$total_offset   <- max(db[[name]]$total,na.rm=T)
       
+      db[[name]]$old   <- rowSums(subset(db[[name]],select = c(which(names(db[[name]]) %in% var.names.old))))
+      db[[name]]$old_ratio   <- db[[name]]$old/max(db[[name]]$old,na.rm=T)
+      db[[name]]$old_stan   <- scale(log(db[[name]]$old))
+      db[[name]]$old_offset   <- max(db[[name]]$old,na.rm=T)
+      
+      db[[name]]$young <- rowSums(subset(db[[name]],select = c(which(names(db[[name]]) %in% var.names.young))))
+      db[[name]]$young_ratio   <- db[[name]]$young/max(db[[name]]$young,na.rm=T)
+      db[[name]]$young_offset   <- max(db[[name]]$young,na.rm=T)
+      db[[name]]$young_stan   <- scale(log(db[[name]]$young))
+      # Now we can remove the individual age data as that's not especially necessary to keep
+      db[[name]] <- subset(db[[name]],select = -c(which(names(db[[name]]) %in% var.names)))
     } # end if(length(cols) > 0 && length(rows) > 0)
 
 } # end for(i in 1:num.stocks)  
 
-plot(db[[name]]$SSB.total~db[[name]]$Year,log="y",type="o",col="black",
-     pch=15,ylim=c(min(db[[name]]$old[db[[name]]$SSB.old>0]),max(db[[name]]$total)))
-lines(db[[name]]$SSB.old~db[[name]]$Year,type="o",col="blue",pch=16)
-lines(db[[name]]$SSB.young~db[[name]]$Year,type="o",col="orange",pch=17)
-
-tst <- do.call("cbind",db[[name]])
-head(tst)
-
-tst <- gam(SSB.young~s(Year),data=db[[name]])
-summary(tst)
-plot(tst)
+### OK, now we have the data, time to start walking through the models properlay
 
 
+
+# Make sure the columns all the same length
+range(lapply(db,ncol))
+
+db <- do.call("rbind",db)
+dim(db)
+
+
+
+
+# Some initial poking around I'll revisit later.
+plot(db[[name]]$total~db[[name]]$Year,log="y",type="o",col="black",
+     pch=15,ylim=c(min(db[[name]]$old[db[[name]]$old>0]),max(db[[name]]$total)))
+lines(db[[name]]$old~db[[name]]$Year,type="o",col="blue",pch=16)
+lines(db[[name]]$young~db[[name]]$Year,type="o",col="orange",pch=17)
+
+tst.off <- glm(young~(Year_cen) ,data=db,family=poisson)
+plot(tst.off)
+summary(tst.off)
+summary(tst.off$lme)
+tst <- gamm4(young_stan~s(Year_cen), random = ~ (1 | Stock.ID),data=db)
+summary(tst$mer)
+summary(tst$gam)
+plot(tst$gam)
+plot(tst$mer) # Nice residuals using stan!!
+
+tst2 <- gamm4(old_stan~s(Year_cen), random = ~ (1 | Stock.ID),data=db)
+summary(tst2$mer)
+summary(tst2$gam) 
+
+# So overall this suggests a decline occured for the first part of the time series followed by a recovery since the late 70's
+# the recovery seems to have slowed more recently
+plot(tst2$gam)
+plot(tst2$mer) # Nice residuals using stan again!!
+
+# Might be a bit of auto-correlation there, maybe ;-)
+acf(tst2$gam$residuals)
 # save(GEO,file="GEO.rdata")
 CSEE.ALL <- rbind(CSEE[,1:6],CSEE[,c(1,2,3,4,7,8)]) #divide young and old
 CSEE.ALL <- as.data.frame(CSEE.ALL,stringsAsFactors=F)
