@@ -1,23 +1,33 @@
-#BM LOG SPECIES (Limited species)       search: SSBL
-#BM Raw                                 search: BRAW
-#NUM LOG                                search: numberrs
-#NUM LOG (Limited species)              search: SPNumberrlogg
-#NUM RAW (not logged)                   search: CSEENUMRRAW
-#CSEE RAW NUM Limited Species           search: NUMRAWSPLIM
+### This script is used to develop the analysis looking at the trends in some measure of abundance for each age class of a
+###  a population, Questions I want to answer
+### 1:  What is the pattern in change of biomass/aboundance over time, does it differ between old and young
+### 2:  What is the current status of old vs. young component of these populations current (relate to max/min historical levels)
+### 3:  There might be a cool question about catch in here (though that could be another paper), what percentage of our catch 
+###     is coming from young/old components of the population and how has that changed over time??
 
-#####################################################
-###                                             ###
-###               BIOMASS LOGGED                ###
-###                                             ###
-###                                             ###
-###################################################         
+
+#############  Section 1 Data Processing#############  Section 1 Data Processing#############  Section 1 Data Processing
 
 rm(list=ls(all=T))
 library(matlab)
 library(lme4)
 library(arm)
 library(gamm4)
+library(lattice)
+library(akima)
+library(mapplots)
+# For linux
+#direct = "/media/sf_data/r/"
+yr = as.numeric(format(Sys.time(), "%Y")) -1
 
+# re-load rprofile if you have one...
+source(".Rprofile")
+#Also load in a couple of R files that will help with plotting, these are from the TESA GAMM course by Zuur that occured in Jan 2016
+# See DK to get these if you need them.  I placed the scripts in the same folder as my .Rprofile so they would be easily accessable.
+# Put these aren't mine to make public!!
+direct = "d:/r/"
+source(paste(direct,"DIYBiplot.R",sep=""))
+source(paste(direct,"HighstatLibV9.R",sep=""))
 #setwd("d:/Dropbox/My_Papers/Biomass_and_age/")
 setwd("d:/Github/Current_papers/Biomass_ts")
 
@@ -40,18 +50,21 @@ ages <- NULL
 age.quan <- NULL
 young.ages <- NULL
 old.ages <- NULL
-i=5
+i=18
 # so we want to run a loop to grab the biomass estiamtes for each stock
 for(i in 1:num.stocks)  
 {
-  #if(i != 69 && i != 72 && i != 125 && i != 19 && i !=18 && i != 9 && i != 29 && i !=41)
-  #{
-    # Get the stock information....
-    name <- unique.stocks[i]
+
+  # Several of these stocks have a male and female entry, so we'll exclude the males
+  # Get the stock information....
+  name <- unique.stocks[i]
+  if(is.element(name,c("ALPLAICBSAIm","ARFLOUNDBSAIm","GHALBSAIm","NRSOLEEBSAIm","YSOLEBSAIm"))==F)
+  {
+    # Grab the names of the stock descriptors to keep and then subset the data by stock and to pull the appropriate
+    # variable defined by var above.
     dat.names <- c("Stock.ID","Management","Area","Order","Family","Genus","Species","LME","Year","Year_cen")
     dat <- subset(ASD_MGMT, Stock.ID == name ,select = c(dat.names,names(ASD_MGMT[,grep(var,names(ASD_MGMT))])))
-    
-    #years <- as.character(ASD_MGMT$Year[ASD_MGMT$Stock.ID == name ][1])
+    # Determine which (if any) columns and rows have data    
     cols <- which(colSums(dat[,grep(var,names(dat))],na.rm=T) > 0)
     rows <- which(rowSums(subset(dat,select = -c(which(names(dat) %in% dat.names))),na.rm=T) == 0)
     # Remove any columns with no data
@@ -68,51 +81,424 @@ for(i in 1:num.stocks)
     # If we have data...
     if(is.null(db[[name]]) == F)
     {
-      # OK, this is a bizarro way to get the ages but it does the trick!
-      ages[[name]]  <- as.numeric(substr(names(db[[name]][(grep("[[:digit:]]",names(db[[name]])))]),start=(nchar(var)+2),stop=(nchar(var)+3)))
+      # OK, this is a bizarro way to get the ages but it does the trick! Following line grabs the variable names...
+      ages[[name]]  <- as.numeric(substr(names(db[[name]][(grep("[[:digit:]]",
+                                                                names(db[[name]])))]),start=(nchar(var)+2),stop=(nchar(var)+3)))
       var.names <- names(db[[name]][(grep("[[:digit:]]",names(db[[name]])))])
       
+      # Now we break the ages into old and young quantiles, this splits the data into the oldest 25% and youngest 25% of ages
+      # Note that we don't think of + groups and that we round so that often it's not 25% (e.g. sometimes 20%, others may be 30%)
       age.quan[[name]] <- quantile(ages[[name]]) 
+      #First the young
       young.ages[[name]] <- round(age.quan[[name]][1]):round(age.quan[[name]][2])
       var.names.young <- var.names[1:length(young.ages[[name]])]
-        
+      # Now for the old
       old.ages[[name]] <- round(age.quan[[name]][4]):round(age.quan[[name]][5]) 
       var.names.old <- var.names[(length(ages[[name]]) - length(old.ages[[name]] ) +1) : length(ages[[name]])]
       
       # A few differnt ways to define our response variable, stan might be the most statisically 
       # pleasing one, I think ratio is the easiest transformation to wrap my head around and to
-      # use when comparing models...
+      # use when comparing models but statistical properties are wonderful
       # The offset might work nicely in terms of the model too and avoid transformation concerns...
-      db[[name]]$total <- rowSums(subset(db[[name]],select = -c(which(names(db[[name]]) %in% dat.names))))
+      db[[name]]$total <- rowSums(subset(db[[name]],select = -c(which(names(db[[name]]) %in% dat.names))),na.rm=T)
+      # Replace 0's with half minimum non-zero value in time series just so log works 
+      if(any(db[[name]]$total == 0))db[[name]]$total[db[[name]]$total == 0] <- 0.5*min(db[[name]]$total[db[[name]]$total > 0])
       db[[name]]$total_ratio   <- db[[name]]$total/max(db[[name]]$total,na.rm=T)
       db[[name]]$total_stan   <- scale(log(db[[name]]$total))
       db[[name]]$total_offset   <- max(db[[name]]$total,na.rm=T)
       
-      db[[name]]$old   <- rowSums(subset(db[[name]],select = c(which(names(db[[name]]) %in% var.names.old))))
+      db[[name]]$old   <- rowSums(subset(db[[name]],select = c(which(names(db[[name]]) %in% var.names.old))),na.rm=T)
+      # Replace 0's with half minimum value in time series just so log works 
+      if(any(db[[name]]$old == 0))db[[name]]$old[db[[name]]$old == 0] <- 0.5*min(db[[name]]$old[db[[name]]$old > 0])
       db[[name]]$old_ratio   <- db[[name]]$old/max(db[[name]]$old,na.rm=T)
       db[[name]]$old_stan   <- scale(log(db[[name]]$old))
       db[[name]]$old_offset   <- max(db[[name]]$old,na.rm=T)
       
-      db[[name]]$young <- rowSums(subset(db[[name]],select = c(which(names(db[[name]]) %in% var.names.young))))
+      db[[name]]$young <- rowSums(subset(db[[name]],select = c(which(names(db[[name]]) %in% var.names.young))),na.rm=T)
+      # Replace 0's with half minimum value in time series just so log works 
+      if(any(db[[name]]$young == 0))db[[name]]$young[db[[name]]$young == 0] <- 0.5*min(db[[name]]$young[db[[name]]$young > 0])
       db[[name]]$young_ratio   <- db[[name]]$young/max(db[[name]]$young,na.rm=T)
       db[[name]]$young_offset   <- max(db[[name]]$young,na.rm=T)
       db[[name]]$young_stan   <- scale(log(db[[name]]$young))
       # Now we can remove the individual age data as that's not especially necessary to keep
       db[[name]] <- subset(db[[name]],select = -c(which(names(db[[name]]) %in% var.names)))
     } # end if(length(cols) > 0 && length(rows) > 0)
-
+  } # end if(is.element(name,c("ALPLAICBSAIm","ARFLOUNDBSAIm","GHALBSAIm","NRSOLEEBSAIm","YSOLEBSAIm"))==F)
 } # end for(i in 1:num.stocks)  
-
-### OK, now we have the data, time to start walking through the models properly
-
-
-
-
 # Make sure the columns all the same length
 range(lapply(db,ncol))
 
 db <- do.call("rbind",db)
 dim(db)
+i=9
+subset(db,Stock.ID==unique(db$Stock.ID)[i])
+#############  End Section 1 Data Processing#############  End Section 1 Data Processing#############  End Section 1 Data Processing
+
+
+#############  Section 2 Data Exploration#############  Section 2 Data Exploration#############  Section 2 Data Exploration
+#############  Section 2 Data Exploration#############  Section 2 Data Exploration#############  Section 2 Data Exploration
+#############  Section 2 Data Exploration#############  Section 2 Data Exploration#############  Section 2 Data Exploration
+### OK, now we have the data, time to start walking through the models properly
+### First lets take a look at our data....
+
+# Let's look and see what we have over time
+# Well even in 1946 we have 3 populations which is nice, by 1950 we have 5, 1955 there are 10 and at the
+# peak we have 1000, drops back to 10 by 2010 but hopefully we can update that!!  We have 100 in the late 90's and  over
+# 20 stocks from 1961 onwards, hit 50 in 1976 and are at 80 in 1982
+aggregate(total_stan~Year,db,FUN=length)
+
+range(aggregate(total_stan~Stock.ID,db,FUN=length)$V1) # Everything has at least 10 years
+# On average the time series are 33 years long, nice!
+median(aggregate(total_stan~Stock.ID,db,FUN=length)$V1)
+
+# How does this break down by other covariates?  ICES and NOAA dominate the analysis, maybe 10% of data are other locations
+aggregate(total_stan~Management,db,FUN=length)
+
+# First we need to set up the plotting area, I hate lattice so I'm doing this my way...
+# Set the number of rows
+nr <- ceiling(sqrt(length(unique(db$Stock.ID))))
+# Set the number of columns, the funky little command is used to add one to the nc if nr is a perfect square
+# As we are printing nchains + 1
+ifelse(sqrt(length(unique(db$Stock.ID))) %% 1==0,  nc <- ceiling(sqrt(length(unique(db$Stock.ID))))+1, 
+       nc <- ceiling(sqrt(length(unique(db$Stock.ID)))))
+windows(15,15)
+ly <- layout(matrix(c(1:(nr*nc)), nr, nc, byrow = T))
+layout.show(ly)
+par(mar=c(0,0,2,0))
+for(i in 1:length(unique(db$Stock.ID))) 
+{
+  with(subset(db,Stock.ID==unique(db$Stock.ID)[i]),plot(old_stan~Year,pch=16,cex=0.01,xaxt="n",yaxt="n",bty="U"))
+  title(unique(db$Stock.ID)[i],cex.main=0.7)
+} # end for(i in 1:length(unique(mw$year))) 
+
+# Now look at the young folks...
+windows(15,15)
+ly <- layout(matrix(c(1:(nr*nc)), nr, nc, byrow = T))
+layout.show(ly)
+par(mar=c(0,0,2,0))
+for(i in 1:length(unique(db$Stock.ID))) 
+{
+  with(subset(db,Stock.ID==unique(db$Stock.ID)[i]),plot(young_stan~Year,pch=16,cex=0.01,xaxt="n",yaxt="n",bty="U"))
+  title(unique(db$Stock.ID)[i],cex.main=0.7)
+} # end for(i in 1:length(unique(mw$year))) 
+
+# Now look at the total
+windows(15,15)
+ly <- layout(matrix(c(1:(nr*nc)), nr, nc, byrow = T))
+layout.show(ly)
+par(mar=c(0,0,2,0))
+for(i in 1:length(unique(db$Stock.ID))) 
+{
+  with(subset(db,Stock.ID==unique(db$Stock.ID)[i]),plot(total_stan~Year,pch=16,cex=0.01,xaxt="n",yaxt="n",bty="U"))
+  title(unique(db$Stock.ID)[i],cex.main=0.7)
+} # end for(i in 1:length(unique(mw$year))) 
+
+
+# Now the histograms of the shell heights, because the bin size is 10's for these the y-axis * 10 gives us
+# the proportion within each bin.  The last time we saw a big spike in any one bin was really 2007 (about 30% were 100-110)
+# Otherwise is it oddly smooth proportion of the samples in each size bin.
+windows(20,15)
+ly <- layout(matrix(c(1:(nr*nc)), nr, nc, byrow = T))
+par(mar=c(2,1,1,2))
+xmax <- ceiling(max(mw$sh)/10)*10) # This rounds the xmax to the tens place (e.g. 172 becomes 180).
+for(i in 1:length(unique(mw$year))) 
+{
+  if(is.element(i,seq(nr,nr*nc,by=nr))==F)   
+  {
+    with(subset(mw,year==sort(unique(mw$year))[i]),hist(sh,xlim=c(50,xmax),cex=0.5,ylim=c(0,0.05),main="",yaxt="n",xaxt="n",freq=F))
+    with(subset(mw,year==sort(unique(mw$year))[i]),text(0.9*xmax,0.8*0.05,unique(year),cex=1.5))
+    axis(2,labels=F)
+    axis(1,cex.axis=0.8)
+  } # end if(i %in% seq(nr,nr*nc,by=nr))   
+  
+  if(i %in% seq(nr,nr*nc,by=nr))   
+  {
+    with(subset(mw,year==sort(unique(mw$year))[i]),hist(sh,xlim=c(50,xmax),cex=0.5,ylim=c(0,0.05),main="",yaxt="n",xaxt="n",freq=F))
+    with(subset(mw,year==sort(unique(mw$year))[i]),text(0.9*xmax,0.8*0.05,unique(year),cex=1.5))
+    axis(4)
+    axis(1,cex.axis=0.8)
+  } # end if(i %in% seq(nr,nr*nc,by=nr))   
+  if(i == length(unique(mw$year))) axis(4)
+} # end for(i in 1:length(unique(mw$year))) 
+
+# These all seems reasonable, certainly some difference in what we are seeing depending on the population...
+
+
+# Now a dotplot of the data looking for outliers and such...
+windows(11,8.5)
+Vars <- c("Year_cen","total","total_ratio","total_stan","total_offset","old"  ,        "old_ratio"   ,
+          "old_stan"  ,   "old_offset"  , "young"     ,   "young_ratio" , "young_offset", "young_stan"  )
+Mydotplot(db[,Vars])
+# You can see the problem with using the raw data, the actual values are so askew for some stocks
+# The ratio is o.k. but having that artifical ceiling at 1 is a pain, the standardized data does look nice
+# but of course interpretation can be a bit funny.
+
+# Now let's look for co-linearity in our data, of course there should be all sorts of it.
+# Can see that the young Biomass is very much correlated with total biomass, but so is old
+# so that's fine.  Not much here since we don't have any real numeric covaraiates...
+windows(11,8.5)
+Vars <- c("Year_cen","total","total_ratio","total_stan","total_offset","old"  ,        "old_ratio"   ,
+          "old_stan"  ,   "old_offset"  , "young"     ,   "young_ratio" , "young_offset", "young_stan"  )
+pairs(db[,Vars],lower.panel=panel.cor)
+
+
+aggregate(young_stan~Year,db,FUN=mean) # How does the mean change each year
+windows(11,8.5)
+plot(aggregate(young_stan~Year,db,FUN=mean),main="Young Standaridzed mean") # Can see a pretty steady decline in this!!
+windows(11,8.5)
+plot(aggregate(old_stan~Year,db,FUN=mean),main="Old Standaridzed mean") # See that rebound in 2000, curious
+windows(11,8.5)
+plot(aggregate(total_stan~Year,db,FUN=mean),main="Total Standaridzed mean") # more cyclic then the others, again some 2000 rebound evidence.
+windows(11,8.5)
+plot(aggregate(young_ratio~Year,db,FUN=mean),main="Young Ratio mean") # Can see a pretty steady decline in this!!
+windows(11,8.5)
+plot(aggregate(old_ratio~Year,db,FUN=mean),main="Old Ratio mean") # collapse as we move into the 70's (given new stocks coming
+# online this collapse is a bit surprising to me!!)
+windows(11,8.5)
+plot(aggregate(total_ratio~Year,db,FUN=mean),main="Total Ratio mean") #
+
+
+# Looking at the ratio data
+aggregate(old_ratio~Year,db,FUN=sd) # How does the variance change each year
+aggregate(young_ratio~Year,db,FUN=sd) # How does the variance change each year
+aggregate(total_ratio~Year,db,FUN=sd) # How does the variance change each year
+windows(11,8.5)
+par(mfrow=c(3,1))
+plot(aggregate(old_ratio~Year,db,FUN=sd),main="Old ratio Variance") # Can see early in the time series we might have a problem 
+# since the stocks are all starting at maximum in late 1940's, but it evens out very quickly.  There is a steady decline
+# which is likely a function of the high ratios disappearing.
+plot(aggregate(young_ratio~Year,db,FUN=sd),main="Young ratio Variance") # For the young the data actually looks solid variance wize.
+plot(aggregate(total_ratio~Year,db,FUN=sd),main="Total ratio Variance") # For the total see it is low early as well, good by the 60's
+
+# Now the standarized data
+aggregate(old_stan~Year,db,FUN=sd) # How does the variance change each year
+aggregate(young_stan~Year,db,FUN=sd) # How does the variance change each year
+aggregate(total_stan~Year,db,FUN=sd) # How does the variance change each year
+windows(11,8.5)
+par(mfrow=c(3,1))
+plot(aggregate(old_stan~Year,db,FUN=sd),main="Old stan Variance") # Slightly surprising pattern, but again after 1960 very steady
+plot(aggregate(young_stan~Year,db,FUN=sd),main="Young stan Variance") # Very low early then steady since 60's
+plot(aggregate(total_stan~Year,db,FUN=sd),main="Total stan Variance") # Steady since the 1960's
+
+# Now let's look at the data against some of our covariates...
+
+# First up management alone
+aggregate(old_ratio~Management,db,FUN=mean)
+aggregate(young_ratio~Management,db,FUN=mean)
+aggregate(total_ratio~Management,db,FUN=mean)
+# These are interesting somewhat surprisingly, can see DFO/NOAA stocks and NAFO stocks are clearly doing worse
+# DFO may also be a bit low.  ICES and NOAA look to be doing better big picture.  Everyone's old are depressed more
+# than 60%, not sure any are much different but DFO does look a bit lower
+windows(11,8.5)
+par(mfrow=c(3,1))
+boxplot(old_ratio~Management,db,main="old")
+boxplot(young_ratio~Management,db,main="young")
+boxplot(total_ratio~Management,db,main="total")
+
+# Stan isn't interesting as they all tend to 0 (because they are standardized by stock, need to remove year to get interesting)
+
+# Can see the database is mostly Herring and Cod, but only Scorpaeniformes is really poorly represented.
+table(subset(db,select=c("Management","Order")))
+
+# Here's boxplot of the ratios by year and management, can see DFO again looks bad!!
+# DK note:  Notice also that NOAA in the early years has data that looks very strange!!
+windows(15,8.5)
+par(mfrow=c(3,1))
+boxplot(old_ratio~interaction(Year,Management),db)
+boxplot(young_ratio~interaction(Year,Management),db)
+boxplot(total_ratio~interaction(Year,Management),db)
+
+# Here's the standarized data...
+windows(15,8.5)
+par(mfrow=c(3,1))
+boxplot(old_stan~interaction(Year,Management),db)
+boxplot(young_stan~interaction(Year,Management),db)
+boxplot(total_stan~interaction(Year,Management),db)
+
+# What about taxonomy, really only enough probably to look at herring vs. cod...
+
+
+# First up order alone, looks like herrings and cods been hit the hardest, 
+# The old ages again showing this, if we look at total most things averaging around 50% or greater.
+aggregate(old_ratio~Order,db,FUN=mean)
+aggregate(young_ratio~Order,db,FUN=mean)
+aggregate(total_ratio~Order,db,FUN=mean)
+# These are interesting somewhat surprisingly, can see DFO/NOAA stocks and NAFO stocks are clearly doing worse
+# DFO may also be a bit low.  ICES and NOAA look to be doing better big picture.  Everyone's old are depressed more
+# than 60%, not sure any are much different but DFO does look a bit lower
+windows(11,8.5)
+par(mfrow=c(3,1))
+boxplot(old_ratio~Order,db,main="old")
+boxplot(young_ratio~Order,db,main="young")
+boxplot(total_ratio~Order,db,main="total")
+
+# Stan isn't interesting as they all tend to 0 (because they are standardized by stock, need to remove year to get interesting)
+
+# Here's boxplot of the ratios by year and Order, can see Gads look worst, Clups were bad but seemingly on comback trail.
+# There is an upswing in old individuals for Clups, Gads, and Pleuro's that you don't see for young or total biomass.
+# DK note:  Notice also that Perciformes in the early years has data that looks very strange, this must be the NOAA pattern too...
+windows(15,8.5)
+par(mfrow=c(3,1))
+boxplot(old_ratio~interaction(Year,Order),db)
+boxplot(young_ratio~interaction(Year,Order),db)
+boxplot(total_ratio~interaction(Year,Order),db)
+
+# Here's the standarized data...
+windows(15,8.5)
+par(mfrow=c(3,1))
+boxplot(old_stan~interaction(Year,Order),db)
+boxplot(young_stan~interaction(Year,Order),db)
+boxplot(total_stan~interaction(Year,Order),db)
+
+####################  END SECTION 1 ####################  END SECTION 1 .####################  END SECTION 1 ##########################
+####################  END SECTION 1 ####################  END SECTION 1 .####################  END SECTION 1 ##########################
+
+
+# Well let's start at the start, how has abundance of old farts changed over time...
+mod.1.old.stan <- lm(old_stan~Year,data=db) # note their used to be a mod.1 when we had outliers in the data, they've been taken care of so mod.1 is gone..
+mod.1.old.rat <- lm(old_ratio~Year,data=db) # note their used to be a mod.1 when we had outliers in the data, they've been taken care of so mod.1 is gone..
+
+# What's it look like, you can see the models are "significant' but they hardly explain anything...
+summary(mod.1.old.stan) 
+summary(mod.1.old.rat) 
+# But wait we include the offset and now the model appears to do very well...
+summary(mod.1.old.offset)
+# How are the residuals, honestly they ain't bad!!
+windows(11,8.5)
+par(mfrow=c(2,2))
+plot(mod.1.old.stan) 
+
+# Now these are terrible!!
+windows(11,8.5)
+par(mfrow=c(2,2))
+plot(mod.1.old.rat) 
+
+
+# The fit of the model to the data...
+windows(11,8.5)
+plot(old_ratio~Year,data=db)
+
+E1.old.rat <- resid(mod.1.old.rat, type = "pearson")
+Disp.rat <- sum(E1.old.rat^2) / mod.1.old.rat$df.res
+Disp.rat
+
+E1.old.stan <- resid(mod.1.old.stan, type = "pearson")
+Disp.stan <- sum(E1.old.stan^2) / mod.1.old.stan$df.res
+Disp.stan
+
+F1.old.stan <- fitted(mod.1.old.stan)
+F1.old.rat <- fitted(mod.1.old.rat)
+
+# You can kinda see the residuals are too high below fitted values of -0.2 and above around 0.2 (not enough low values up there)
+windows(11,8.5)
+par(mfrow=c(1,1))
+plot(x = F1.old.stan, 
+     y = E1.old.stan,
+     xlab = "Fitted values",
+     ylab = "Pearson residuals")
+abline(h=0,col="blue",lty=2)
+
+# What is the residual trend?
+gam.E1.old.stan <- gam(E1.old.stan~te(F1.old.stan))
+summary(gam.E1.old.stan) # Only 2% of residual variance explained, but significant trend..
+windows(11,8.5)
+plot(gam.E1.old.stan) # Clearly a trend in residuals with E being too high at both low and high fitted values...
+
+# What is the residual trend?
+gam.E1.old.rat <- gam(E1.old.rat~te(F1.old.rat))
+summary(gam.E1.old.rat) # Only 3% of residual variance explained
+windows(11,8.5)
+plot(gam.E1.old.rat) #Clearly residuals are too high at both low and high fitted values
+
+#Next how do the residuals look versus Year , I think it's related to the above, not enough low residuals early (when populations)
+# were doing good, and not enough low late, which is suggesting a rebound for the old individuals here I think...
+windows(11,8.5)
+plot(E1.old.stan ~db$Year)
+abline(h=0,col="blue",lty=2)
+
+# Let's do a gam on these residuals...
+center_year <- db$Year_cen
+gam.E1.old.stan.year <- gam(E1.old.stan~te(center_year))
+summary(gam.E1.old.stan.year) # Only 2% of residual variance explained, but significant trend..
+windows(11,8.5)
+plot(gam.E1.old.stan.year) # Same trend more or less as we saw above...
+
+# What do the residuals look like versus Managment...
+
+windows(11,8.5)
+par(mfrow=c(2,1))
+boxplot(E1.old.stan~db$Management, main="Old Stan") # nothing exciting here and not sure there could be...
+boxplot(E1.old.rat~db$Management, main="Old Ratio") # NAFO and DFO's look low when we look this way...
+
+# How about against taxonomy...
+
+windows(11,8.5)
+par(mfrow=c(2,1))
+boxplot(E1.old.stan~db$Order, main="Old Stan") # nothing exciting here and not sure there could be
+boxplot(E1.old.rat~db$Order, main="Old Ratio") # Clupeiforms and Gadiforms both looking low...
+
+
+
+##########  So really what we have here are counts which change over time, what we want is a glm, but given the 
+##########  major differences in counts between populations we need to include an offset, so a poisson glm with offset seems reasonable alternative..
+
+
+mod.2.old.poisson <- glm(old~Year,data=db,offset=log(old_offset),family=quasipoisson) # note their used to be a mod.1 when we had outliers in the data, they've been taken care of so mod.1 is gone..
+
+summary(mod.2.old.poisson)
+
+
+# For the model checking I need to look at the model we developed with Njal!!!
+E2.old.poisson <- resid(mod.2.old.poisson, type = "deviance")
+Disp.stan <- sum(E2.old.poisson^2) / mod.2.old.poisson$df.res
+Disp.stan
+
+# I think that's actually the fitted values of interest... I think...
+F2.old.poisson <- fitted(mod.2.old.poisson)/db$old_offset
+
+# How are the residuals, gross!!
+windows(11,8.5)
+par(mfrow=c(2,2))
+plot(mod.2.old.poisson) 
+
+
+# You can kinda see the residuals are too high below fitted values of -0.2 and above around 0.2 (not enough low values up there)
+windows(11,8.5)
+par(mfrow=c(1,1))
+plot(x = F2.old.poisson, 
+     y = E2.old.poisson,
+     xlab = "Fitted values",
+     ylab = "Pearson residuals")
+abline(h=0,col="blue",lty=2)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
