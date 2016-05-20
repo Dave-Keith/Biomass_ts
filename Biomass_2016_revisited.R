@@ -129,9 +129,7 @@ for(i in 1:num.stocks)
 range(lapply(db,ncol))
 
 db <- do.call("rbind",db)
-dim(db)
-i=9
-subset(db,Stock.ID==unique(db$Stock.ID)[i])
+
 #############  End Section 1 Data Processing#############  End Section 1 Data Processing#############  End Section 1 Data Processing
 
 
@@ -361,8 +359,7 @@ mod.1.old.rat <- lm(old_ratio~Year,data=db) # note their used to be a mod.1 when
 # What's it look like, you can see the models are "significant' but they hardly explain anything...
 summary(mod.1.old.stan) 
 summary(mod.1.old.rat) 
-# But wait we include the offset and now the model appears to do very well...
-summary(mod.1.old.offset)
+
 # How are the residuals, honestly they ain't bad!!
 windows(11,8.5)
 par(mfrow=c(2,2))
@@ -376,7 +373,7 @@ plot(mod.1.old.rat)
 
 # The fit of the model to the data...
 windows(11,8.5)
-plot(old_ratio~Year,data=db)
+plot(old_ratio~Year,data=db,pch=16)
 
 E1.old.rat <- resid(mod.1.old.rat, type = "pearson")
 Disp.rat <- sum(E1.old.rat^2) / mod.1.old.rat$df.res
@@ -438,12 +435,20 @@ boxplot(E1.old.stan~db$Order, main="Old Stan") # nothing exciting here and not s
 boxplot(E1.old.rat~db$Order, main="Old Ratio") # Clupeiforms and Gadiforms both looking low...
 
 
+# What's our buddy autocorrelation saying about the residuals...
+# Looks like we have at least an AR1, possibly an AR2...
+windows(11,8.5)
+par(mfrow=c(2,2))
+acf(E1.old.stan)
+pacf(E1.old.stan)
+acf(E1.old.rat)
+pacf(E1.old.rat)
+
 
 ##########  So really what we have here are counts which change over time, what we want is a glm, but given the 
 ##########  major differences in counts between populations we need to include an offset, so a poisson glm with offset seems reasonable alternative..
-
-
-mod.2.old.poisson <- glm(old~Year,data=db,offset=log(old_offset),family=quasipoisson) # note their used to be a mod.1 when we had outliers in the data, they've been taken care of so mod.1 is gone..
+##########  Using the quasipoisson because the data are not integers and is likely super over-dispersed anyway...
+mod.2.old.poisson <- glm(old~Year,data=db,offset=log(old_offset),family=quasipoisson) 
 
 summary(mod.2.old.poisson)
 
