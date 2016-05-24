@@ -476,6 +476,234 @@ plot(x = F2.old.poisson,
      ylab = "Pearson residuals")
 abline(h=0,col="blue",lty=2)
 
+# This model just doesn't have nice properties, if instead we try something similar 
+# But include each population as a random term do things look any better?
+# I don't like this model because it is forcing the same shape on all the Stocks which is BS, problem
+# is can I get more complex models working or do we need to go gam/bayesian at this point?
+mod.2.old.rand.int <- glmer(old ~ Year_cen + (1  | Stock.ID),data=db,offset=log(old_offset),family=poisson) 
+summary(mod.2.old.rand.int)
+
+mod.2.old.rand.slopes.only <- glmer(old ~  (1 +Year_cen | Stock.ID),data=db,offset=log(old_offset),family=poisson) 
+summary(mod.2.old.rand.slopes.only)
+
+mod.2.old.fix_n_rand.slopes <- glmer(old ~ Year_cen + (1 +Year_cen | Stock.ID),data=db,offset=log(old_offset),family=poisson) 
+summary(mod.2.old.fix_n_rand.slopes)
+
+# Now we can move back to our standarized data since it has far nicer properties than the above
+# The real problem above is surely the offset, using Stan these are pretty tidy...
+
+mod.2.oldstan.fix.n.rand.slopes <- lmer(old_stan ~ Year_cen + (1 +Year_cen | Stock.ID),data=db) 
+summary(mod.2.oldstan.fix.n.rand.slopes)
+
+# On the surface my biggest concern here is forcing the model to be linear over time...
+# The fit of the model to the data...
+windows(11,8.5)
+plot(old_ratio~Year,data=db,pch=16)
+
+E2.oldstan.fnrs <- resid(mod.2.oldstan.fix.n.rand.slopes, type = "pearson")
+Disp.stan <- sum(E2.oldstan.fnrs^2) / df.residual(mod.2.oldstan.fix.n.rand.slopes)
+Disp.stan
+
+F2.oldstan.fnrs <- fitted(mod.2.oldstan.fix.n.rand.slopes)
+
+
+# You can kinda see the residuals are too high below fitted values of -0.2 and above around 0.2 (not enough low values up there)
+windows(11,8.5)
+par(mfrow=c(1,1))
+plot(x = E2.oldstan.fnrs, 
+     y = F2.oldstan.fnrs,
+     xlab = "Fitted values",
+     ylab = "Pearson residuals")
+abline(h=0,col="blue",lty=2)
+
+# What is the residual trend?
+gam.E2.oldstan.fnrs <- gam(E2.oldstan.fnrs~te(F2.oldstan.fnrs))
+summary(gam.E2.oldstan.fnrs) # Only 2% of residual variance explained, but significant trend..
+windows(11,8.5)
+plot(gam.E2.oldstan.fnrs) # A new and interesting residual trend here...
+
+
+#Next how do the residuals look versus Year , I think it's related to the above, not enough low residuals early (when populations)
+# were doing good, and not enough low late, which is suggesting a rebound for the old individuals here I think...
+windows(11,8.5)
+plot(E2.oldstan.fnrs ~db$Year)
+abline(h=0,col="blue",lty=2)
+
+# Let's do a gam on these residuals...
+center_year <- db$Year_cen
+gam.E2.oldstan.fnrs.y <- gam(E2.oldstan.fnrs~te(center_year))
+summary(gam.E2.oldstan.fnrs.y) # Only 2% of residual variance explained, but significant trend..
+windows(11,8.5)
+plot(gam.E2.oldstan.fnrs.y) # Rather different residual trend than what we found compared to fitted, curious...
+
+# What do the residuals look like versus Managment...
+
+windows(11,8.5)
+boxplot(E2.oldstan.fnrs~db$Management, main="Old Stan") # nothing exciting here and not sure there could be...
+
+# How about against taxonomy...
+windows(11,8.5)
+boxplot(E2.oldstan.fnrs~db$Order, main="Old Stan") # nothing exciting here and not sure there could be
+
+
+
+# What's our buddy autocorrelation saying about the residuals...
+# Looks like we have a solid AR1 process that we aren't accounting for...
+windows(11,8.5)
+par(mfrow=c(2,1))
+acf(E2.oldstan.fnrs)
+pacf(E2.oldstan.fnrs)
+
+
+#############################  Can using a GAM help us at all, won't solve autocorrelation
+#############################  But may can help us with the bad residuals??
+
+# Note I needed to make the Stock.ID a factor.  I think this little puppy is a nice simple model that
+# is close to reasonable.
+mod.2.oldstan.gam <- gamm4(old_stan ~  t2(Year_cen, by = as.factor(Stock.ID)),data=db) 
+summary(mod.2.oldstan.gam$gam)
+summary(mod.2.oldstan.gam$mer)
+
+E2.oldstan.gam <- resid(mod.2.oldstan.gam$mer, type = "pearson")
+# I'm not sure this is right for this gam, but it might be...
+Disp.oldstan.gam <- sum(E2.oldstan.gam^2) / (nrow(db) -sum(mod.2.oldstan.gam$gam$edf))
+Disp.oldstan.gam
+
+F2.oldstan.gam<- fitted(mod.2.oldstan.gam$mer)
+
+
+# You can kinda see the residuals are too high below fitted values of -0.2 and above around 0.2 (not enough low values up there)
+windows(11,8.5)
+par(mfrow=c(1,1))
+plot(x = E2.oldstan.gam, 
+     y = F2.oldstan.gam,
+     xlab = "Fitted values",
+     ylab = "Pearson residuals")
+abline(h=0,col="blue",lty=2)
+
+# What is the residual trend?
+gam.E2.oldstan.gam <- gam(E2.oldstan.gam~te(F2.oldstan.gam))
+summary(gam.E2.oldstan.gam) # Cut the deviance explained down to almost exactly 1 %.
+windows(11,8.5)
+plot(gam.E2.oldstan.gam) # It's a hair better but not fabulous yet...
+
+
+# These are looking pretty decent now.
+windows(11,8.5)
+plot(E2.oldstan.gam ~db$Year)
+abline(h=0,col="blue",lty=2)
+
+# Let's do a gam on these residuals...
+center_year <- db$Year_cen
+gam.E2.oldstan.gam.y <- gam(E2.oldstan.gam~te(center_year))
+summary(gam.E2.oldstan.gam.y) # The GAM has done it's job, nothing left...
+windows(11,8.5)
+plot(gam.E2.oldstan.gam.y) # Nothing left...
+
+# What do the residuals look like versus Managment...
+
+windows(11,8.5)
+boxplot(E2.oldstan.gam~db$Management, main="Old Stan") # nothing exciting here and not sure there could be...
+
+# How about against taxonomy...
+windows(11,8.5)
+boxplot(E2.oldstan.gam~db$Order, main="Old Stan") # nothing exciting here and not sure there could be
+
+
+
+# What's our buddy autocorrelation saying about the residuals...
+# Looks like we still have a solid AR1 process that we aren't accounting for...
+windows(11,8.5)
+par(mfrow=c(2,1))
+acf(E2.oldstan.gam)
+pacf(E2.oldstan.gam)
+
+
+
+##########  So what happens if we try a model with an AR1 process??  This could do the trick
+##########  but I need to sort out how to deal with the Stock.ID to make it a really randome term?
+mod2.oldstan.AR1 <- gamm(old_stan ~  t2(Year_cen, by = as.factor(Stock.ID)),data=db,correlation=corAR1()) 
+
+summary(mod2.oldstan.AR1$gam)
+summary(mod2.oldstan.AR1$lme)
+
+E2.oldstan.AR1 <- resid(mod2.oldstan.AR1$lme, type = "pearson")
+# I'm not sure this is right for this gam, but it might be...
+Disp.oldstan.AR1 <- sum(E2.oldstan.gam^2) / (nrow(db) -sum(mod2.oldstan.AR1$gam$edf))
+Disp.oldstan.AR1
+
+F2.oldstan.gam<- fitted(mod.2.oldstan.AR1$lme)
+
+
+# You can kinda see the residuals are too high below fitted values of -0.2 and above around 0.2 (not enough low values up there)
+windows(11,8.5)
+par(mfrow=c(1,1))
+plot(x = E2.oldstan.gam, 
+     y = F2.oldstan.gam,
+     xlab = "Fitted values",
+     ylab = "Pearson residuals")
+abline(h=0,col="blue",lty=2)
+
+# What is the residual trend?
+gam.E2.oldstan.gam <- gam(E2.oldstan.gam~te(F2.oldstan.gam))
+summary(gam.E2.oldstan.gam) # Cut the deviance explained down to almost exactly 1 %.
+windows(11,8.5)
+plot(gam.E2.oldstan.gam) # It's a hair better but not fabulous yet...
+
+
+# These are looking pretty decent now.
+windows(11,8.5)
+plot(E2.oldstan.gam ~db$Year)
+abline(h=0,col="blue",lty=2)
+
+# Let's do a gam on these residuals...
+center_year <- db$Year_cen
+gam.E2.oldstan.gam.y <- gam(E2.oldstan.gam~te(center_year))
+summary(gam.E2.oldstan.gam.y) # The GAM has done it's job, nothing left...
+windows(11,8.5)
+plot(gam.E2.oldstan.gam.y) # Nothing left...
+
+# What do the residuals look like versus Managment...
+
+windows(11,8.5)
+boxplot(E2.oldstan.gam~db$Management, main="Old Stan") # nothing exciting here and not sure there could be...
+
+# How about against taxonomy...
+windows(11,8.5)
+boxplot(E2.oldstan.gam~db$Order, main="Old Stan") # nothing exciting here and not sure there could be
+
+
+
+# What's our buddy autocorrelation saying about the residuals...
+# Looks like we still have a solid AR1 process that we aren't accounting for...
+windows(11,8.5)
+par(mfrow=c(2,1))
+acf(E2.oldstan.gam)
+pacf(E2.oldstan.gam)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
