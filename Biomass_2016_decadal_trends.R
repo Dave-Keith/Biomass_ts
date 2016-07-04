@@ -409,15 +409,44 @@ for(i in 1:length(stocks))
 dev.off()
 res.db <- do.call("rbind",res.lst)
 
-# So now that I have the data let's start looking at it...
+# Re-arrange the data so we have the data set up to use for a model to compare different r values.
+names(res.db)
+tst1 <- res.db[,c(-grep("young",names(res.db)),-grep("old",names(res.db)))]
+tst1 <- cbind(tst1,rep("total",nrow(tst1)))
 
+tst2 <- res.db[,c(-grep("young",names(res.db)),-grep("total",names(res.db)),-grep("tot",names(res.db)))]
+tst2 <- cbind(tst2,rep("old",nrow(tst1)))
+
+tst3 <- res.db[,c(-grep("old",names(res.db)),-grep("total",names(res.db)),-grep("tot",names(res.db)))]
+tst3 <- cbind(tst3,rep("young",nrow(tst1)))
+
+colnames(tst1) <- c("years","Stock.ID","Order","Genus","species","Management","r","se","num.years","pred.first",
+                    "pred.last","y.first","y.last","lambda","age") 
+colnames(tst2) <- colnames(tst1)
+colnames(tst3) <- colnames(tst1)
+
+mod.db <- rbind(tst1,tst2,tst3)
+
+# So now that I have the data let's start looking at it...
+par(mfrow=c(3,1))
 plot(res.db$r.tot)
 plot(res.db$r.young)
 plot(res.db$r.old)
 
+par(mfrow=c(3,1))
 plot(res.db$r.tot~res.db$years)
 plot(res.db$r.old~res.db$years)
 plot(res.db$r.young~res.db$years)
+
+par(mfrow=c(3,1))
+plot(res.db$r.tot~res.db$Management)
+plot(res.db$r.old~res.db$Management)
+plot(res.db$r.young~res.db$Management)
+
+par(mfrow=c(3,1))
+plot(res.db$r.tot~res.db$Order)
+plot(res.db$r.old~res.db$Order)
+plot(res.db$r.young~res.db$Order)
 
 
 median(res.db$r.tot,na.rm=T)
@@ -444,3 +473,19 @@ res.db$lambda.old <-  exp(res.db$r.old)
 median(aggregate(lambda.tot~Stock.ID,res.db,FUN=prod)$lambda.tot,na.rm=T)
 median(aggregate(lambda.young~Stock.ID,res.db,FUN=prod)$lambda.young,na.rm=T)
 median(aggregate(lambda.old~Stock.ID,res.db,FUN=prod)$lambda.old,na.rm=T)
+
+
+mod.1 <- lm(r~age,mod.db)
+summary(mod.1)
+AIC(mod.1)
+
+mod.2 <- lm(r~age*years,mod.db)
+summary(mod.2)
+AIC(mod.1,mod.2)
+
+mod.3 <- lm(r~age*years*Order,mod.db)
+summary(mod.3)
+AIC(mod.1,mod.2,mod.3)
+
+mod.1a <- lm(r.tot~as.factor(years)*Order,res.db)
+summary(mod.1a)
